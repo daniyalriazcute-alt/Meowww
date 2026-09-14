@@ -16,6 +16,18 @@ st.set_page_config(
 
 inject_global_css()
 
+# --- TEMPORARY DEBUG BLOCK ---
+try:
+    _keys = list(st.secrets.keys())
+    st.warning(f"DEBUG: keys = {_keys}")
+    if "MONGO_URI" in st.secrets:
+        st.success("DEBUG: MONGO_URI found")
+    else:
+        st.error("DEBUG: MONGO_URI MISSING")
+except Exception as e:
+    st.error(f"DEBUG: error reading secrets — {e}")
+# --- END DEBUG BLOCK ---
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
