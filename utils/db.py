@@ -40,14 +40,26 @@ def _get_client():
     except Exception:
         uri = os.environ.get("MONGO_URI")
 
+    print("DEBUG: uri is None?", uri is None)
+    print("DEBUG: PYMONGO_AVAILABLE =", PYMONGO_AVAILABLE)
+    if uri:
+        # Show first 40 chars only, no password leak
+        print("DEBUG: uri prefix =", uri[:40])
+
     if not uri or not PYMONGO_AVAILABLE:
+        print("DEBUG: returning None because uri missing or pymongo unavailable")
         return None
 
     try:
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
         client.admin.command("ping")
+        print("DEBUG: MongoDB connection SUCCESS")
         return client
-    except PyMongoError:
+    except PyMongoError as e:
+        print("DEBUG: MongoDB connection FAILED:", repr(e))
+        return None
+    except Exception as e:
+        print("DEBUG: Unexpected error:", repr(e))
         return None
 
 
