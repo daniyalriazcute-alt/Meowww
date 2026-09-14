@@ -1,164 +1,145 @@
-import hashlib
-import hmac
-import os
-import re
-from datetime import datetime, timezone
+import base64
+from pathlib import Path
 
 import streamlit as st
 
+from utils.style import inject_global_css, hero, divider, panel_start, panel_end, footer, BG_IMAGE_PATH
+from utils.db import is_authenticated
+from utils.content import get_all_posts
+
+st.set_page_config(
+    page_title="AI Offensive Security",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+inject_global_css()
+
+# ============================================================
+# TEMPORARY MONGODB DIAGNOSTIC
+# ============================================================
+st.markdown("## 🔧 MongoDB Diagnostic")
+
 try:
-    from pymongo import MongoClient
-    from pymongo.errors import PyMongoError
-    PYMONGO_AVAILABLE = True
-except ImportError:
-    PYMONGO_AVAILABLE = False
+    _keys = list(st.secrets.keys())
+    st.write(f"**1. Secrets keys found:** `{_keys}`")
 
-DB_NAME = "ai_offensive_security"
-USERS_COLLECTION = "users"
-
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-@st.cache_resource(show_spinner=False)
-def _get_client():
-    uri = None
-    try:
-        uri = st.secrets.get("MONGO_URI")
-    except Exception:
-        uri = os.environ.get("MONGO_URI")
-
-    print("DEBUG: uri is None?", uri is None)
-    print("DEBUG: PYMONGO_AVAILABLE =", PYMONGO_AVAILABLE)
-    if uri:
-        print("DEBUG: uri prefix =", uri[:40])
-
-    if not uri or not PYMONGO_AVAILABLE:
-        print("DEBUG: returning None (missing uri or pymongo)")
-        return None
-
-    try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        client.admin.command("ping")
-        print("DEBUG: MongoDB connection SUCCESS")
-        return client
-    except PyMongoError as e:
-        print("DEBUG: MongoDB connection FAILED:", repr(e))
-        return None
-    except Exception as e:
-        print("DEBUG: Unexpected error:", repr(e))
-        return None
-
-
-def _get_users_collection():
-    client = _get_client()
-    if client is None:
-        return None
-    return client[DB_NAME][USERS_COLLECTION]
-
-
-def db_is_connected() -> bool:
-    return _get_users_collection() is not None
-
-
-def _local_store():
-    if "local_users" not in st.session_state:
-        st.session_state.local_users = {}
-    return st.session_state.local_users
-
-
-def _hash_password(password: str, salt: bytes | None = None) -> str:
-    if salt is None:
-        salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
-    return f"{salt.hex()}${digest.hex()}"
-
-
-def _verify_password(password: str, stored: str) -> bool:
-    try:
-        salt_hex, digest_hex = stored.split("$")
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(digest_hex)
-    except ValueError:
-        return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
-    return hmac.compare_digest(candidate, expected)
-
-
-def is_valid_email(email: str) -> bool:
-    return bool(EMAIL_RE.match(email or ""))
-
-
-def password_strength_issues(password: str) -> list[str]:
-    issues = []
-    if len(password or "") < 8:
-        issues.append("at least 8 characters")
-    if not re.search(r"[A-Z]", password or ""):
-        issues.append("one uppercase letter")
-    if not re.search(r"[a-z]", password or ""):
-        issues.append("one lowercase letter")
-    if not re.search(r"\d", password or ""):
-        issues.append("one number")
-    return issues
-
-
-def register_user(name: str, email: str, password: str) -> tuple[bool, str]:
-    email = email.strip().lower()
-    name = name.strip()
-
-    if not name:
-        return False, "Please enter your name."
-    if not is_valid_email(email):
-        return False, "Please enter a valid email address."
-    issues = password_strength_issues(password)
-    if issues:
-        return False, "Password needs: " + ", ".join(issues) + "."
-
-    hashed = _hash_password(password)
-    doc = {
-        "name": name,
-        "email": email,
-        "password": hashed,
-        "created_at": datetime.now(timezone.utc),
-    }
-
-    col = _get_users_collection()
-    if col is not None:
-        if col.find_one({"email": email}):
-            return False, "An account with this email already exists."
-        col.insert_one(doc)
-        return True, "Account created successfully. You can now log in."
-
-    store = _local_store()
-    if email in store:
-        return False, "An account with this email already exists."
-    store[email] = doc
-    return True, "Account created successfully (demo mode — no database configured). You can now log in."
-
-
-def authenticate_user(email: str, password: str) -> tuple[bool, str]:
-    email = email.strip().lower()
-    col = _get_users_collection()
-
-    if col is not None:
-        user = col.find_one({"email": email})
+    if "MONGO_URI" not in st.secrets:
+        st.error("❌ MONGO_URI is MISSING from Streamlit Cloud secrets.")
     else:
-        user = _local_store().get(email)
+        _uri = st.secrets["MONGO_URI"]
+        st.write(f"**2. MONGO_URI prefix:** `{_uri[:50]}...`")
 
-    if not user:
-        return False, "No account found with that email."
-    if not _verify_password(password, user["password"]):
-        return False, "Incorrect password."
+        try:
+            from pymongo import MongoClient
+            st.write("**3. Pinging MongoDB...**")
+            _c = MongoClient(_uri, serverSelectionTimeoutMS=8000)
+            _result = _c.admin.command("ping")
+            st.success(f"✅ PING SUCCESS — {_result}")
+        except Exception as _e:
+            st.error(f"❌ PING FAILED — **{type(_e).__name__}**: {_e}")
+except Exception as _outer:
+    st.error(f"❌ Error reading secrets — {type(_outer).__name__}: {_outer}")
 
-    st.session_state.authenticated = True
-    st.session_state.user_name = user["name"]
-    st.session_state.user_email = user["email"]
-    return True, f"Welcome back, {user['name']}!"
+st.markdown("---")
+# ============================================================
 
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    if BG_IMAGE_PATH.exists():
+        st.markdown('<div class="avatar-glow">', unsafe_allow_html=True)
+        st.image(str(BG_IMAGE_PATH), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("### 🛡️ AI Offensive Security")
+    if is_authenticated():
+        st.success(f"Signed in as **{st.session_state.get('user_name')}**")
+    else:
+        st.info("You're browsing as a guest. Log in for the full experience.")
+    st.caption("Navigate using the pages menu above ☝️")
 
-def logout():
-    for key in ("authenticated", "user_name", "user_email"):
-        st.session_state.pop(key, None)
+# ---------------------------------------------------------------------------
+# Hero
+# ---------------------------------------------------------------------------
+hero("AI OFFENSIVE SECURITY", "Red-teaming the machines before someone else does")
 
+st.markdown(
+    """
+    <p style='text-align:center; max-width:780px; margin:18px auto 0 auto; color:#e7d4ee; font-size:1.05rem;'>
+    A research &amp; education hub covering how large language models get attacked —
+    prompt injection, jailbreaking, indirect injection, and evasion — so defenders
+    can build AI systems that hold up under real adversarial pressure.
+    </p>
+    """,
+    unsafe_allow_html=True,
+)
 
-def is_authenticated() -> bool:
-    return bool(st.session_state.get("authenticated"))
+divider()
+
+# ---------------------------------------------------------------------------
+# Feature cards
+# ---------------------------------------------------------------------------
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    panel_start()
+    st.markdown("#### 🧬 Attack Taxonomy")
+    st.write(
+        "Deep-dive write-ups on prompt injection, jailbreaking, indirect "
+        "injection, and filter-evasion technique families — explained at a "
+        "conceptual level for red teams and defenders."
+    )
+    panel_end()
+
+with col2:
+    panel_start()
+    st.markdown("#### 🧪 Defense Playbooks")
+    st.write(
+        "Every post pairs the offense with concrete mitigations: least-privilege "
+        "tool access, output handling, context segmentation, and monitoring "
+        "strategies you can apply today."
+    )
+    panel_end()
+
+with col3:
+    panel_start()
+    st.markdown("#### 🔐 Member Access")
+    st.write(
+        "Create a free account to bookmark research, track your reading, and "
+        "get notified as new technique write-ups are published."
+    )
+    if not is_authenticated():
+        st.page_link("pages/4_✍️_Register.py", label="Create your account →")
+    panel_end()
+
+divider()
+
+# ---------------------------------------------------------------------------
+# Latest posts preview
+# ---------------------------------------------------------------------------
+st.markdown("### 📰 Latest Research")
+
+posts = get_all_posts()
+cols = st.columns(3)
+for i, post in enumerate(posts[:3]):
+    with cols[i % 3]:
+        panel_start()
+        sev_class = f"severity-{post['severity']}"
+        st.markdown(
+            f'<span class="tag {sev_class}">{post["severity"].upper()} SEVERITY</span>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(f"##### {post['title']}")
+        st.caption(f"⏱️ {post['read_time']} &nbsp;|&nbsp; " + " • ".join(post["tags"]))
+        st.write(post["summary"])
+        panel_end()
+
+st.markdown("")
+left, mid, right = st.columns([1, 1, 1])
+with mid:
+    st.page_link("pages/1_📝_Blog.py", label="Browse the full blog →", icon="📝")
+
+divider()
+footer()
