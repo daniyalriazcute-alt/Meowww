@@ -1,12 +1,3 @@
-"""
-MongoDB-backed authentication helpers.
-
-Uses a free MongoDB Atlas cluster (see README for setup). The connection
-string is read from Streamlit secrets as `MONGO_URI`. If it is missing,
-the app falls back to a local in-memory store so the UI still works in a
-sandbox/demo environment.
-"""
-
 import hashlib
 import hmac
 import os
@@ -19,7 +10,7 @@ try:
     from pymongo import MongoClient
     from pymongo.errors import PyMongoError
     PYMONGO_AVAILABLE = True
-except ImportError:  # pragma: no cover
+except ImportError:
     PYMONGO_AVAILABLE = False
 
 DB_NAME = "ai_offensive_security"
@@ -28,12 +19,8 @@ USERS_COLLECTION = "users"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-# --------------------------------------------------------------------------
-# Connection
-# --------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _get_client():
-    """Returns a cached MongoClient, or None if no URI is configured."""
     uri = None
     try:
         uri = st.secrets.get("MONGO_URI")
@@ -43,11 +30,10 @@ def _get_client():
     print("DEBUG: uri is None?", uri is None)
     print("DEBUG: PYMONGO_AVAILABLE =", PYMONGO_AVAILABLE)
     if uri:
-        # Show first 40 chars only, no password leak
         print("DEBUG: uri prefix =", uri[:40])
 
     if not uri or not PYMONGO_AVAILABLE:
-        print("DEBUG: returning None because uri missing or pymongo unavailable")
+        print("DEBUG: returning None (missing uri or pymongo)")
         return None
 
     try:
@@ -74,18 +60,12 @@ def db_is_connected() -> bool:
     return _get_users_collection() is not None
 
 
-# --------------------------------------------------------------------------
-# Local fallback store (demo mode only — resets on restart)
-# --------------------------------------------------------------------------
 def _local_store():
     if "local_users" not in st.session_state:
         st.session_state.local_users = {}
     return st.session_state.local_users
 
 
-# --------------------------------------------------------------------------
-# Password hashing (PBKDF2-HMAC-SHA256, stdlib only)
-# --------------------------------------------------------------------------
 def _hash_password(password: str, salt: bytes | None = None) -> str:
     if salt is None:
         salt = os.urandom(16)
@@ -104,9 +84,6 @@ def _verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(candidate, expected)
 
 
-# --------------------------------------------------------------------------
-# Validation
-# --------------------------------------------------------------------------
 def is_valid_email(email: str) -> bool:
     return bool(EMAIL_RE.match(email or ""))
 
@@ -124,9 +101,6 @@ def password_strength_issues(password: str) -> list[str]:
     return issues
 
 
-# --------------------------------------------------------------------------
-# Public API
-# --------------------------------------------------------------------------
 def register_user(name: str, email: str, password: str) -> tuple[bool, str]:
     email = email.strip().lower()
     name = name.strip()
@@ -154,7 +128,6 @@ def register_user(name: str, email: str, password: str) -> tuple[bool, str]:
         col.insert_one(doc)
         return True, "Account created successfully. You can now log in."
 
-    # local fallback
     store = _local_store()
     if email in store:
         return False, "An account with this email already exists."
