@@ -1,155 +1,49 @@
-import hashlib
-import hmac
-import os
-import re
-from datetime import datetime, timezone
+import base64
+from pathlib import Path
 
 import streamlit as st
 
+from utils.style import inject_global_css, hero, divider, panel_start, panel_end, footer, BG_IMAGE_PATH
+from utils.db import is_authenticated
+from utils.content import get_all_posts
+
+st.set_page_config(
+    page_title="AI Offensive Security",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+inject_global_css()
+
+# ============================================================
+# TEMPORARY MONGODB DIAGNOSTIC
+# ============================================================
+st.markdown("## 🔧 MongoDB Diagnostic")
+
 try:
-    from pymongo import MongoClient
-    from pymongo.errors import PyMongoError
-    PYMONGO_AVAILABLE = True
-except ImportError:
-    PYMONGO_AVAILABLE = False
+    _keys = list(st.secrets.keys())
+    st.write(f"**1. Secrets keys:** `{_keys}`")
 
-DB_NAME = "ai_offensive_security"
-USERS_COLLECTION = "users"
-
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-@st.cache_resource(show_spinner=False)
-def _get_client():
-    uri = None
-    try:
-        uri = st.secrets.get("MONGO_URI")
-    except Exception:
-        uri = os.environ.get("MONGO_URI")
-
-    if not uri or not PYMONGO_AVAILABLE:
-        return None
-
-    try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        client.admin.command("ping")
-        return client
-    except PyMongoError:
-        return None
-    except Exception:
-        return None
-
-
-def _get_users_collection():
-    client = _get_client()
-    if client is None:
-        return None
-    return client[DB_NAME][USERS_COLLECTION]
-
-
-def db_is_connected() -> bool:
-    return _get_users_collection() is not None
-
-
-def _local_store():
-    if "local_users" not in st.session_state:
-        st.session_state.local_users = {}
-    return st.session_state.local_users
-
-
-def _hash_password(password: str, salt: bytes | None = None) -> str:
-    if salt is None:
-        salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
-    return f"{salt.hex()}${digest.hex()}"
-
-
-def _verify_password(password: str, stored: str) -> bool:
-    try:
-        salt_hex, digest_hex = stored.split("$")
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(digest_hex)
-    except ValueError:
-        return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
-    return hmac.compare_digest(candidate, expected)
-
-
-def is_valid_email(email: str) -> bool:
-    return bool(EMAIL_RE.match(email or ""))
-
-
-def password_strength_issues(password: str) -> list[str]:
-    issues = []
-    if len(password or "") < 8:
-        issues.append("at least 8 characters")
-    if not re.search(r"[A-Z]", password or ""):
-        issues.append("one uppercase letter")
-    if not re.search(r"[a-z]", password or ""):
-        issues.append("one lowercase letter")
-    if not re.search(r"\d", password or ""):
-        issues.append("one number")
-    return issues
-
-
-def register_user(name: str, email: str, password: str) -> tuple[bool, str]:
-    email = email.strip().lower()
-    name = name.strip()
-
-    if not name:
-        return False, "Please enter your name."
-    if not is_valid_email(email):
-        return False, "Please enter a valid email address."
-    issues = password_strength_issues(password)
-    if issues:
-        return False, "Password needs: " + ", ".join(issues) + "."
-
-    hashed = _hash_password(password)
-    doc = {
-        "name": name,
-        "email": email,
-        "password": hashed,
-        "created_at": datetime.now(timezone.utc),
-    }
-
-    col = _get_users_collection()
-    if col is not None:
-        if col.find_one({"email": email}):
-            return False, "An account with this email already exists."
-        col.insert_one(doc)
-        return True, "Account created successfully. You can now log in."
-
-    store = _local_store()
-    if email in store:
-        return False, "An account with this email already exists."
-    store[email] = doc
-    return True, "Account created successfully (demo mode — no database configured). You can now log in."
-
-
-def authenticate_user(email: str, password: str) -> tuple[bool, str]:
-    email = email.strip().lower()
-    col = _get_users_collection()
-
-    if col is not None:
-        user = col.find_one({"email": email})
+    if "MONGO_URI" not in st.secrets:
+        st.error("❌ MONGO_URI is MISSING from Streamlit Cloud secrets.")
     else:
-        user = _local_store().get(email)
+        _uri = st.secrets["MONGO_URI"]
+        st.write(f"**2. MONGO_URI length:** `{len(_uri)}` characters")
+        st.write(f"**3. MONGO_URI prefix:** `{_uri[:55]}`")
 
-    if not user:
-        return False, "No account found with that email."
-    if not _verify_password(password, user["password"]):
-        return False, "Incorrect password."
+        try:
+            from pymongo import MongoClient
+            st.write("**4. Pinging MongoDB...**")
+            _c = MongoClient(_uri, serverSelectionTimeoutMS=8000)
+            _result = _c.admin.command("ping")
+            st.success(f"✅ PING SUCCESS — {_result}")
+        except Exception as _e:
+            st.error(f"❌ PING FAILED — **{type(_e).__name__}**")
+            st.code(str(_e))
+except Exception as _outer:
+    st.error(f"❌ Error reading secrets — {type(_outer).__name__}")
+    st.code(str(_outer))
 
-    st.session_state.authenticated = True
-    st.session_state.user_name = user["name"]
-    st.session_state.user_email = user["email"]
-    return True, f"Welcome back, {user['name']}!"
-
-
-def logout():
-    for key in ("authenticated", "user_name", "user_email"):
-        st.session_state.pop(key, None)
-
-
-def is_authenticated() -> bool:
-    return bool(st.session_state.get("authenticated"))
+st.markdown("---")
+# ============================================================
